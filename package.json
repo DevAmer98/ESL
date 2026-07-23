@@ -1,0 +1,32 @@
+{
+  "name": "frostline-esl",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "node prisma/seed.mjs",
+    "db:seed:demo": "node prisma/seed-demo.mjs",
+    "db:studio": "prisma studio",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.9.0",
+    "@prisma/client": "^7.9.0",
+    "bcryptjs": "^3.0.3",
+    "cron-parser": "^5.6.2",
+    "dotenv": "^17.4.2",
+    "next": "^16.2.10",
+    "papaparse": "^5.5.4",
+    "pg": "^8.22.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "prisma": "^7.9.0"
+  }
+}

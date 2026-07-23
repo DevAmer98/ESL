@@ -1,0 +1,41 @@
+# Reproducible local/staging stack. Production should point DATABASE_URL at a
+# managed Postgres instead of running the db container.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: esl
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-esl}
+      POSTGRES_DB: esl
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U esl -d esl"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://esl:${POSTGRES_PASSWORD:-esl}@db:5432/esl?schema=public
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY}
+      CRON_SECRET: ${CRON_SECRET:-}
+      WORKER_ENABLED: "true"
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    volumes:
+      # Uploaded media lives on disk; keep it out of the image layer.
+      - media:/app/storage
+
+volumes:
+  pgdata:
+  media:

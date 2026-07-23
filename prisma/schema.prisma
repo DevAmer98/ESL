@@ -1,0 +1,511 @@
+// -----------------------------------------------------------------------------
+// Frostline ESL — Postgres schema.
+//
+// Everything except User/Session hangs off a Store. Tenancy is enforced in the
+// service layer (lib/tenancy.js), but the storeId columns + compound uniques
+// here are what make that enforcement cheap and indexable.
+//
+// Money is stored as integer minor units (cents) — never floats.
+// -----------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================ identity & tenancy =============================
+
+model Store {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  timezone  String   @default("UTC")
+  currency  String   @default("USD")
+  archivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships      Membership[]
+  gateways         Gateway[]
+  products         Product[]
+  labels           Label[]
+  labelGroups      LabelGroup[]
+  templates        Template[]
+  settings         StoreSettings?
+  scheduledUpdates ScheduledUpdate[]
+  templateStrategies TemplateStrategy[]
+  mediaAssets      MediaAsset[]
+  operationRecords OperationRecord[]
+  offlineHistory   OfflineHistory[]
+  dataChanges      DataChange[]
+  deletionLogs     DeletionLog[]
+  sensorReadings   SensorReading[]
+  pushJobs         PushJob[]
+  columnPrefs      ColumnPreference[]
+
+  @@index([archivedAt])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  isSuperAdmin Boolean  @default(false)
+  lastLoginAt  DateTime?
+  disabledAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships Membership[]
+  sessions    Session[]
+  columnPrefs ColumnPreference[]
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+model Membership {
+  id      String @id @default(cuid())
+  userId  String
+  storeId String
+  role    Role   @default(VIEWER)
+
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, storeId])
+  @@index([storeId])
+}
+
+/// Sessions store a SHA-256 hash of the opaque cookie token, never the token.
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ============================== hardware =====================================
+
+enum GatewayStatus {
+  ONLINE
+  OFFLINE
+  UNKNOWN
+}
+
+model Gateway {
+  id           String        @id @default(cuid())
+  storeId      String
+  name         String
+  mac          String
+  ip           String?
+  model        String        @default("G1-E")
+  wifiFirmware String?
+  bleFirmware  String?
+  bleModules   Int           @default(1)
+  status       GatewayStatus @default(UNKNOWN)
+  lastSeenAt   DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  labels Label[]
+
+  @@unique([storeId, mac])
+  @@index([storeId, status])
+}
+
+enum LabelStatus {
+  ONLINE
+  OFFLINE
+  BROADCASTING
+  ERROR
+  UNKNOWN
+}
+
+model Label {
+  id          String      @id @default(cuid())
+  storeId     String
+  mac         String
+  model       String      @default("DS026F")
+  sizeInches  Decimal?    @db.Decimal(4, 2)
+  battery     Int         @default(100)
+  rssi        Int?
+  status      LabelStatus @default(UNKNOWN)
+  productId   String?
+  templateId  String?
+  gatewayId   String?
+  groupId     String?
+  lastBroadcastAt DateTime?
+  lastUpdateAt    DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  store    Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product  Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  template Template?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  gateway  Gateway?    @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  group    LabelGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  operationRecords OperationRecord[]
+  sensorReadings   SensorReading[]
+  pushJobs         PushJob[]
+
+  @@unique([storeId, mac])
+  @@index([storeId, status])
+  @@index([storeId, battery])
+  @@index([productId])
+  @@index([groupId])
+}
+
+model LabelGroup {
+  id          String  @id @default(cuid())
+  storeId     String
+  name        String
+  description String?
+  sortOrder   Int     @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  labels Label[]
+
+  @@unique([storeId, name])
+  @@index([storeId, sortOrder])
+}
+
+// =============================== catalog =====================================
+
+/// `code` is the merchant-facing product id shown in Store Data (e.g. "10081").
+/// `attributes` holds tenant-defined extra columns so Customize Columns can
+/// surface fields we never modelled.
+model Product {
+  id             String   @id @default(cuid())
+  storeId        String
+  code           String
+  name           String
+  specification  String?
+  unit           String?
+  priceCents     Int      @default(0)
+  memberPriceCents Int?
+  brand          String?
+  weight         String?
+  origin         String?
+  sku            String?
+  glyph          String   @default("📦")
+  attributes     Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  labels Label[]
+
+  @@unique([storeId, code])
+  @@index([storeId, name])
+  @@index([storeId, updatedAt])
+}
+
+// ============================== templates ====================================
+
+enum ColorMode {
+  BW
+  BWR
+  BWRY
+  SEVEN_COLOR
+}
+
+enum TemplateKind {
+  LABEL
+  STORE
+}
+
+/// `layout` is the canonical element tree the renderer walks:
+/// { elements: [{ type, x, y, w, h, ...props }] } — see lib/render/schema.js.
+model Template {
+  id         String       @id @default(cuid())
+  storeId    String
+  name       String
+  kind       TemplateKind @default(LABEL)
+  sizeInches Decimal      @db.Decimal(4, 2)
+  widthPx    Int
+  heightPx   Int
+  colorMode  ColorMode    @default(BW)
+  rotation   Int          @default(0)
+  layout     Json         @default("{\"elements\":[]}")
+  thumbnail  String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  store      Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  labels     Label[]
+  strategies TemplateStrategy[]
+  scheduledUpdates ScheduledUpdate[]
+
+  @@unique([storeId, name])
+  @@index([storeId, sizeInches, colorMode])
+}
+
+// ============================ store settings =================================
+
+enum IntegrationMode {
+  DEMO
+  CLOUD
+  GATEWAY
+}
+
+/// One row per store. `parameters` carries the tunables surfaced on the
+/// Parameter Settings tab (retry counts, broadcast intervals, thresholds).
+model StoreSettings {
+  storeId        String          @id
+  mode           IntegrationMode @default(DEMO)
+  cloudUrl       String          @default("")
+  /// Encrypted at rest via lib/crypto.js — never returned to the browser.
+  tokenCipher    String?
+  gatewayIp      String          @default("")
+  parameters     Json            @default("{}")
+  updatedAt      DateTime        @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+}
+
+model ScheduledUpdate {
+  id         String    @id @default(cuid())
+  storeId    String
+  name       String
+  cron       String
+  timezone   String    @default("UTC")
+  enabled    Boolean   @default(true)
+  /// { groupIds: [], labelIds: [], allLabels: bool }
+  target     Json      @default("{}")
+  templateId String?
+  lastRunAt  DateTime?
+  nextRunAt  DateTime?
+  lastResult String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  template Template? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, enabled, nextRunAt])
+}
+
+/// Auto-assign a template to a label when `condition` matches the bound
+/// product. Highest priority wins.
+model TemplateStrategy {
+  id         String   @id @default(cuid())
+  storeId    String
+  name       String
+  priority   Int      @default(0)
+  enabled    Boolean  @default(true)
+  /// { field, op, value } — evaluated by lib/services/strategy.js
+  condition  Json     @default("{}")
+  templateId String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, enabled, priority])
+}
+
+model MediaAsset {
+  id        String   @id @default(cuid())
+  storeId   String
+  name      String
+  mimeType  String
+  bytes     Int
+  width     Int?
+  height    Int?
+  /// Storage key (local path under ./storage or an object-store key).
+  key       String
+  createdAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, createdAt])
+}
+
+// ========================= statistics & audit ================================
+
+enum OperationType {
+  PUSH
+  REFRESH
+  BIND
+  UNBIND
+  LED_FLASH
+  REBOOT
+  FIRMWARE_UPDATE
+  IMPORT
+  SCHEDULED_PUSH
+}
+
+enum OperationResult {
+  SUCCESS
+  FAILURE
+  PENDING
+}
+
+/// Backs the Operation Record + Update Performance tabs. `snapshot` freezes the
+/// product data as rendered, so history stays truthful after the product edits.
+model OperationRecord {
+  id            String          @id @default(cuid())
+  storeId       String
+  labelId       String?
+  mac           String?
+  groupName     String?
+  operationType OperationType
+  result        OperationResult
+  detail        String?
+  durationMs    Int?
+  snapshot      Json            @default("{}")
+  operatorId    String?
+  createdAt     DateTime        @default(now())
+
+  store Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  label Label? @relation(fields: [labelId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, result, createdAt])
+  @@index([storeId, operationType, createdAt])
+}
+
+enum DeviceType {
+  LABEL
+  GATEWAY
+}
+
+model OfflineHistory {
+  id          String     @id @default(cuid())
+  storeId     String
+  deviceType  DeviceType
+  deviceId    String
+  mac         String
+  offlineAt   DateTime
+  onlineAt    DateTime?
+  durationSec Int?
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, offlineAt])
+  @@index([storeId, deviceType, offlineAt])
+}
+
+model DataChange {
+  id        String   @id @default(cuid())
+  storeId   String
+  entity    String
+  entityId  String
+  field     String
+  oldValue  String?
+  newValue  String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, entity, entityId])
+}
+
+model DeletionLog {
+  id        String   @id @default(cuid())
+  storeId   String
+  entity    String
+  entityId  String
+  snapshot  Json     @default("{}")
+  userId    String?
+  createdAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, entity, createdAt])
+}
+
+model SensorReading {
+  id          String   @id @default(cuid())
+  storeId     String
+  labelId     String
+  temperature Decimal? @db.Decimal(5, 2)
+  humidity    Decimal? @db.Decimal(5, 2)
+  recordedAt  DateTime
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, recordedAt])
+  @@index([labelId, recordedAt])
+}
+
+// ============================== push queue ===================================
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+/// Durable outbox for hardware pushes. The worker claims rows with
+/// SELECT ... FOR UPDATE SKIP LOCKED so multiple app instances stay safe.
+model PushJob {
+  id          String    @id @default(cuid())
+  storeId     String
+  labelId     String
+  status      JobStatus @default(QUEUED)
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  runAt       DateTime  @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  lastError   String?
+  payload     Json      @default("{}")
+  operatorId  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@index([status, runAt])
+  @@index([storeId, createdAt])
+}
+
+// ========================= per-user table prefs ==============================
+
+/// Backs "Customize Columns" — one row per user per table per store.
+model ColumnPreference {
+  id       String @id @default(cuid())
+  userId   String
+  storeId  String
+  tableKey String
+  /// { visible: [..], order: [..], widths: {} }
+  config   Json   @default("{}")
+
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, storeId, tableKey])
+}

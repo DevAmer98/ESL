@@ -1,0 +1,7 @@
+node_modules/
+.next/
+esl.db
+esl.db-shm
+esl.db-wal
+.env
+storage/
