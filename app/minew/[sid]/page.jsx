@@ -4,7 +4,7 @@
 // tag tables. Everything reads through /api/minew/stores/:sid/*.
 import { use, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/client/api";
-import { Btn, Card, Dot, Spinner, Tabs, dateTime, timeAgo } from "@/components/ui";
+import { Btn, Card, Chip, Dot, Spinner, Tabs, dateTime, timeAgo } from "@/components/ui";
 import { BarChart, Donut, Legend } from "@/components/charts";
 
 const LOW_BATTERY = 20;
@@ -141,74 +141,100 @@ export default function MinewStoreDetail({ params }) {
   );
 }
 
-function StatusCell({ online }) {
+function StatusPill({ online }) {
   return (
-    <span className="inline" style={{ gap: 6 }}>
-      <Dot tone={online ? "ok" : "bad"} /><span>{online ? "online" : "offline"}</span>
+    <Chip tone={online ? "ok" : "bad"}>
+      <Dot tone={online ? "ok" : "bad"} pulse={online} />{online ? "online" : "offline"}
+    </Chip>
+  );
+}
+
+function Battery({ v }) {
+  if (v == null) return <span className="faint">—</span>;
+  const tone = v <= 20 ? "var(--bad)" : v <= 50 ? "var(--warn)" : "var(--ok)";
+  return (
+    <span className="inline" style={{ gap: 8 }}>
+      <span style={{ width: 34, height: 6, borderRadius: 4, background: "var(--line)",
+        overflow: "hidden", display: "inline-block" }}>
+        <span style={{ display: "block", height: "100%", width: `${Math.max(0, Math.min(100, v))}%`,
+          background: tone }} />
+      </span>
+      <span style={{ color: tone, fontSize: 12 }}>{v}%</span>
     </span>
   );
 }
 
-function GatewaysTable({ state }) {
-  if (state.loading) return <div className="center-screen"><Spinner /></div>;
+function Rssi({ v }) {
+  if (v == null) return <span className="faint">—</span>;
+  const tone = v >= -60 ? "var(--ok)" : v >= -80 ? "var(--warn)" : "var(--bad)";
+  return <span className="mono" style={{ color: tone }}>{v}</span>;
+}
+
+function TableState({ state, children, empty }) {
+  if (state.loading) return <Card><div className="empty"><Spinner /> Loading…</div></Card>;
   if (state.error) return <Card><div className="empty" style={{ color: "var(--bad)" }}>{state.error}</div></Card>;
+  if (!children) return <Card><div className="empty">{empty}</div></Card>;
+  return <div className="table-wrap">{children}</div>;
+}
+
+function GatewaysTable({ state }) {
   const rows = state.data?.gateways ?? [];
-  if (!rows.length) return <Card><div className="empty">No gateways.</div></Card>;
   return (
-    <Card flush>
-      <table className="table">
-        <thead><tr>
-          <th>Status</th><th>Name</th><th>MAC</th><th>Model</th>
-          <th>IP</th><th>WiFi FW</th><th>BLE FW</th><th>Last seen</th>
-        </tr></thead>
-        <tbody>
-          {rows.map((g) => (
-            <tr key={g.mac}>
-              <td><StatusCell online={g.online} /></td>
-              <td>{g.name}</td>
-              <td className="mono">{g.mac}</td>
-              <td>{g.model ?? "—"}</td>
-              <td className="mono">{g.ip ?? "—"}</td>
-              <td className="mono">{g.wifiFirmware ?? "—"}</td>
-              <td className="mono">{g.bleFirmware ?? "—"}</td>
-              <td title={dateTime(g.lastSeenAt)}>{g.lastSeenAt ? timeAgo(g.lastSeenAt) : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
+    <TableState state={state} empty="No gateways in this store.">
+      {rows.length ? (
+        <table className="data">
+          <thead><tr>
+            <th>Status</th><th>Name</th><th>MAC</th><th>Model</th>
+            <th>IP</th><th>WiFi FW</th><th>BLE FW</th><th>Last seen</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((g) => (
+              <tr key={g.mac}>
+                <td><StatusPill online={g.online} /></td>
+                <td style={{ fontWeight: 600 }}>{g.name}</td>
+                <td className="mono">{g.mac}</td>
+                <td>{g.model ? <Chip>{g.model}</Chip> : "—"}</td>
+                <td className="mono">{g.ip ?? "—"}</td>
+                <td className="mono faint">{g.wifiFirmware ?? "—"}</td>
+                <td className="mono faint">{g.bleFirmware ?? "—"}</td>
+                <td className="faint" title={dateTime(g.lastSeenAt)}>
+                  {g.lastSeenAt ? timeAgo(g.lastSeenAt) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </TableState>
   );
 }
 
 function TagsTable({ state }) {
-  if (state.loading) return <div className="center-screen"><Spinner /></div>;
-  if (state.error) return <Card><div className="empty" style={{ color: "var(--bad)" }}>{state.error}</div></Card>;
   const rows = state.data?.tags ?? [];
-  if (!rows.length) return <Card><div className="empty">No tags.</div></Card>;
   return (
-    <Card flush>
-      <table className="table">
-        <thead><tr>
-          <th>Status</th><th>MAC</th><th>Size</th><th>Color</th>
-          <th>Battery</th><th>RSSI</th><th>Bound to</th><th>Last update</th>
-        </tr></thead>
-        <tbody>
-          {rows.map((t) => (
-            <tr key={t.mac}>
-              <td><StatusCell online={t.online} /></td>
-              <td className="mono">{t.mac}</td>
-              <td>{t.sizeInches ? `${t.sizeInches}"` : "—"}</td>
-              <td>{t.color ?? "—"}</td>
-              <td style={{ color: t.battery != null && t.battery <= LOW_BATTERY ? "var(--warn)" : undefined }}>
-                {t.battery != null ? `${t.battery}%` : "—"}
-              </td>
-              <td className="mono">{t.rssi ?? "—"}</td>
-              <td className="mono">{t.goodsId ?? "—"}</td>
-              <td>{t.lastUpdate ?? "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
+    <TableState state={state} empty="No tags in this store.">
+      {rows.length ? (
+        <table className="data">
+          <thead><tr>
+            <th>Status</th><th>MAC</th><th>Size</th><th>Color</th>
+            <th>Battery</th><th>RSSI</th><th>Bound to</th><th>Last update</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((t) => (
+              <tr key={t.mac}>
+                <td><StatusPill online={t.online} /></td>
+                <td className="mono" style={{ fontWeight: 600 }}>{t.mac}</td>
+                <td>{t.sizeInches ? `${t.sizeInches}"` : "—"}</td>
+                <td>{t.color ? <Chip>{t.color}</Chip> : "—"}</td>
+                <td><Battery v={t.battery} /></td>
+                <td><Rssi v={t.rssi} /></td>
+                <td>{t.goodsId ? <span className="mono">{t.goodsId}</span> : <span className="faint">unbound</span>}</td>
+                <td className="faint">{t.lastUpdate ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </TableState>
   );
 }
