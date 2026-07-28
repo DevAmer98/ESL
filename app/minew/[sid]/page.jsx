@@ -1,110 +1,153 @@
 "use client";
-// A Minew store's overview — live stat cards (gateways / ESL / battery) plus the
-// gateway and tag tables. All read straight from the backend via
-// /api/minew/stores/:sid/{gateways,tags}. No local mirror.
-import { use, useEffect, useState } from "react";
+// A Minew store's overview — reuses the app's dashboard design (SplitStat cards,
+// weekly bar chart, success donut) fed by live Minew data, plus the gateway and
+// tag tables. Everything reads through /api/minew/stores/:sid/*.
+import { use, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/client/api";
 import { Btn, Card, Dot, Spinner, Tabs, dateTime, timeAgo } from "@/components/ui";
+import { BarChart, Donut, Legend } from "@/components/charts";
 
 const LOW_BATTERY = 20;
+const WEEKLY_SERIES = [
+  { key: "succeeded", label: "Succeeded", color: "var(--accent)" },
+  { key: "failed", label: "Failed", color: "var(--bad)" },
+];
+
+/** Two-sided tile — the split matters more than either number alone. */
+function SplitStat({ title, left, right, leftTone = "var(--ok)", rightTone = "var(--bad)" }) {
+  const total = (left.value ?? 0) + (right.value ?? 0);
+  const pct = total > 0 ? ((left.value ?? 0) / total) * 100 : 0;
+  return (
+    <Card>
+      <div className="stat-label" style={{ marginBottom: 12, marginTop: 0 }}>{title}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div>
+          <span className="stat" style={{ color: leftTone, fontSize: 26 }}>{left.value ?? 0}</span>
+          <span className="faint" style={{ fontSize: 11, marginLeft: 5 }}>{left.label}</span>
+        </div>
+        <div className="right">
+          <span className="stat" style={{ color: rightTone, fontSize: 26 }}>{right.value ?? 0}</span>
+          <span className="faint" style={{ fontSize: 11, marginLeft: 5 }}>{right.label}</span>
+        </div>
+      </div>
+      <div style={{ height: 4, background: rightTone, borderRadius: 4, marginTop: 10,
+        overflow: "hidden", opacity: total ? 1 : 0.25 }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: leftTone }} />
+      </div>
+    </Card>
+  );
+}
 
 export default function MinewStoreDetail({ params }) {
   const { sid } = use(params);
   const router = useRouter();
   const [tab, setTab] = useState("gateways");
+  const [ov, setOv] = useState({ loading: true, data: null, error: null });
   const [gw, setGw] = useState({ loading: true, data: null, error: null });
   const [tags, setTags] = useState({ loading: true, data: null, error: null });
 
-  async function loadGw() {
+  const loadOv = useCallback(async () => {
+    setOv((s) => ({ ...s, loading: true }));
+    try { setOv({ loading: false, data: await api.get(`/minew/stores/${sid}/overview`), error: null }); }
+    catch (e) { setOv({ loading: false, data: null, error: e.message }); }
+  }, [sid]);
+  const loadGw = useCallback(async () => {
     setGw((s) => ({ ...s, loading: true }));
-    try {
-      setGw({ loading: false, data: await api.get(`/minew/stores/${sid}/gateways`), error: null });
-    } catch (e) {
-      setGw({ loading: false, data: null, error: e.message });
-    }
-  }
-  async function loadTags() {
+    try { setGw({ loading: false, data: await api.get(`/minew/stores/${sid}/gateways`), error: null }); }
+    catch (e) { setGw({ loading: false, data: null, error: e.message }); }
+  }, [sid]);
+  const loadTags = useCallback(async () => {
     setTags((s) => ({ ...s, loading: true }));
-    try {
-      setTags({ loading: false, data: await api.get(`/minew/stores/${sid}/tags`), error: null });
-    } catch (e) {
-      setTags({ loading: false, data: null, error: e.message });
-    }
-  }
-  useEffect(() => { loadGw(); loadTags(); }, [sid]);
+    try { setTags({ loading: false, data: await api.get(`/minew/stores/${sid}/tags`), error: null }); }
+    catch (e) { setTags({ loading: false, data: null, error: e.message }); }
+  }, [sid]);
 
-  const gwData = gw.data;
-  const tagRows = tags.data?.tags ?? [];
-  const low = tagRows.filter((t) => t.battery != null && t.battery <= LOW_BATTERY).length;
+  const reload = useCallback(() => { loadOv(); loadGw(); loadTags(); }, [loadOv, loadGw, loadTags]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const d = ov.data;
+  const weekly = (d?.weekly ?? []).map((x) => ({
+    ...x,
+    label: new Date(x.date).toLocaleDateString(undefined, { month: "numeric", day: "numeric" }),
+  }));
+  const success = d?.refresh?.success ?? 0;
+  const failure = d?.refresh?.failure ?? 0;
 
   return (
-    <div className="page" style={{ maxWidth: 1200, margin: "0 auto", paddingTop: 40 }}>
+    <div className="page" style={{ maxWidth: 1200, margin: "0 auto", paddingTop: 32 }}>
       <div className="page-head">
         <div>
           <Btn sm onClick={() => router.push("/minew")}>← Stores</Btn>
           <h1 style={{ marginTop: 8 }}>Store overview</h1>
           <div className="sub mono">{sid}</div>
         </div>
-        <Btn onClick={() => { loadGw(); loadTags(); }}>↻ Reload</Btn>
+        <Btn onClick={reload}>↻ Reload</Btn>
       </div>
 
-      {/* stat cards */}
-      <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", marginBottom: 18 }}>
-        <StatCard title="Gateways" loading={gw.loading}
-          left={{ label: "online", value: gwData?.online ?? 0, tone: "ok" }}
-          right={{ label: "offline", value: (gwData?.total ?? 0) - (gwData?.online ?? 0), tone: "bad" }} />
-        <StatCard title="ESL tags" loading={tags.loading}
-          left={{ label: "online", value: tags.data?.online ?? 0, tone: "ok" }}
-          right={{ label: "offline", value: (tags.data?.total ?? 0) - (tags.data?.online ?? 0), tone: "bad" }} />
-        <StatCard title="Battery health" loading={tags.loading}
-          left={{ label: "normal", value: (tags.data?.total ?? 0) - low, tone: "ok" }}
-          right={{ label: "low", value: low, tone: "warn" }} />
-        <StatCard title="Bound" loading={tags.loading}
-          left={{ label: "bound", value: tags.data?.bound ?? 0, tone: "ok" }}
-          right={{ label: "unbound", value: (tags.data?.total ?? 0) - (tags.data?.bound ?? 0), tone: "faint" }} />
+      {ov.error && <Card><div className="empty" style={{ color: "var(--bad)" }}>{ov.error}</div></Card>}
+
+      <div className="grid" style={{
+        gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", marginBottom: 18,
+      }}>
+        <SplitStat title="Gateway"
+          left={{ value: d?.gateway?.online, label: "online" }}
+          right={{ value: d?.gateway?.offline, label: "offline" }} />
+        <SplitStat title="ESL"
+          left={{ value: d?.label?.online, label: "online" }}
+          right={{ value: d?.label?.offline, label: "offline" }} />
+        <SplitStat title="Refresh · 24h"
+          left={{ value: success, label: "success" }}
+          right={{ value: failure, label: "failure" }} />
+        <SplitStat title="Battery health"
+          left={{ value: d?.battery?.normal, label: "normal" }}
+          right={{ value: d?.battery?.low, label: "low" }}
+          rightTone="var(--warn)" />
+      </div>
+
+      <div className="grid" style={{ gridTemplateColumns: "minmax(0,1fr) auto",
+        alignItems: "start", marginBottom: 18 }}>
+        <Card>
+          <div style={{ display: "flex", justifyContent: "space-between",
+            alignItems: "center", marginBottom: 14 }}>
+            <b style={{ fontSize: 14 }}>Weekly update status</b>
+            <Legend series={WEEKLY_SERIES} />
+          </div>
+          {weekly.every((w) => !w.succeeded && !w.failed)
+            ? <div className="empty">No updates recorded this week.</div>
+            : <BarChart data={weekly} series={WEEKLY_SERIES} />}
+        </Card>
+
+        <Card style={{ textAlign: "center", minWidth: 240 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Success rate</div>
+          <Donut value={success} total={success + failure} label="last 24h" />
+          <div className="kv" style={{ marginTop: 12, fontSize: 12 }}>
+            <span className="k">Succeeded</span><span style={{ color: "var(--ok)" }}>{success}</span>
+          </div>
+          <div className="kv" style={{ fontSize: 12 }}>
+            <span className="k">Failed</span><span style={{ color: "var(--bad)" }}>{failure}</span>
+          </div>
+        </Card>
       </div>
 
       <Tabs
         tabs={[
-          { id: "gateways", label: gwData ? `Gateways (${gwData.online}/${gwData.total})` : "Gateways" },
+          { id: "gateways", label: gw.data ? `Gateways (${gw.data.online}/${gw.data.total})` : "Gateways" },
           { id: "tags", label: tags.data ? `Tags (${tags.data.online}/${tags.data.total})` : "Tags" },
         ]}
         active={tab}
         onChange={setTab}
       />
-
       {tab === "gateways" && <GatewaysTable state={gw} />}
       {tab === "tags" && <TagsTable state={tags} />}
     </div>
   );
 }
 
-function StatCard({ title, left, right, loading }) {
-  return (
-    <Card>
-      <div className="hint" style={{ marginBottom: 10 }}>{title}</div>
-      {loading ? <Spinner /> : (
-        <div className="inline" style={{ justifyContent: "space-between" }}>
-          <div className="inline" style={{ gap: 6 }}>
-            <Dot tone={left.tone} /><b style={{ fontSize: 20 }}>{left.value}</b>
-            <span className="hint">{left.label}</span>
-          </div>
-          <div className="inline" style={{ gap: 6 }}>
-            <b style={{ fontSize: 20 }}>{right.value}</b>
-            <span className="hint">{right.label}</span>
-          </div>
-        </div>
-      )}
-    </Card>
-  );
-}
-
 function StatusCell({ online }) {
   return (
     <span className="inline" style={{ gap: 6 }}>
-      <Dot tone={online ? "ok" : "bad"} />
-      <span>{online ? "online" : "offline"}</span>
+      <Dot tone={online ? "ok" : "bad"} /><span>{online ? "online" : "offline"}</span>
     </span>
   );
 }
@@ -117,12 +160,10 @@ function GatewaysTable({ state }) {
   return (
     <Card flush>
       <table className="table">
-        <thead>
-          <tr>
-            <th>Status</th><th>Name</th><th>MAC</th><th>Model</th>
-            <th>IP</th><th>WiFi FW</th><th>BLE FW</th><th>Last seen</th>
-          </tr>
-        </thead>
+        <thead><tr>
+          <th>Status</th><th>Name</th><th>MAC</th><th>Model</th>
+          <th>IP</th><th>WiFi FW</th><th>BLE FW</th><th>Last seen</th>
+        </tr></thead>
         <tbody>
           {rows.map((g) => (
             <tr key={g.mac}>
@@ -150,12 +191,10 @@ function TagsTable({ state }) {
   return (
     <Card flush>
       <table className="table">
-        <thead>
-          <tr>
-            <th>Status</th><th>MAC</th><th>Size</th><th>Color</th>
-            <th>Battery</th><th>RSSI</th><th>Bound to</th><th>Last update</th>
-          </tr>
-        </thead>
+        <thead><tr>
+          <th>Status</th><th>MAC</th><th>Size</th><th>Color</th>
+          <th>Battery</th><th>RSSI</th><th>Bound to</th><th>Last update</th>
+        </tr></thead>
         <tbody>
           {rows.map((t) => (
             <tr key={t.mac}>
