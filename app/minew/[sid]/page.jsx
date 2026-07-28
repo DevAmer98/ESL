@@ -1,10 +1,13 @@
 "use client";
-// A Minew store's live hardware — gateways and tags — read straight from the
-// backend via /api/minew/stores/:sid/{gateways,tags}. No local mirror.
+// A Minew store's overview — live stat cards (gateways / ESL / battery) plus the
+// gateway and tag tables. All read straight from the backend via
+// /api/minew/stores/:sid/{gateways,tags}. No local mirror.
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/client/api";
 import { Btn, Card, Dot, Spinner, Tabs, dateTime, timeAgo } from "@/components/ui";
+
+const LOW_BATTERY = 20;
 
 export default function MinewStoreDetail({ params }) {
   const { sid } = use(params);
@@ -31,20 +34,40 @@ export default function MinewStoreDetail({ params }) {
   }
   useEffect(() => { loadGw(); loadTags(); }, [sid]);
 
+  const gwData = gw.data;
+  const tagRows = tags.data?.tags ?? [];
+  const low = tagRows.filter((t) => t.battery != null && t.battery <= LOW_BATTERY).length;
+
   return (
-    <div className="page" style={{ maxWidth: 1100, margin: "0 auto", paddingTop: 40 }}>
+    <div className="page" style={{ maxWidth: 1200, margin: "0 auto", paddingTop: 40 }}>
       <div className="page-head">
         <div>
           <Btn sm onClick={() => router.push("/minew")}>← Stores</Btn>
-          <h1 style={{ marginTop: 8 }}>Store hardware</h1>
+          <h1 style={{ marginTop: 8 }}>Store overview</h1>
           <div className="sub mono">{sid}</div>
         </div>
         <Btn onClick={() => { loadGw(); loadTags(); }}>↻ Reload</Btn>
       </div>
 
+      {/* stat cards */}
+      <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", marginBottom: 18 }}>
+        <StatCard title="Gateways" loading={gw.loading}
+          left={{ label: "online", value: gwData?.online ?? 0, tone: "ok" }}
+          right={{ label: "offline", value: (gwData?.total ?? 0) - (gwData?.online ?? 0), tone: "bad" }} />
+        <StatCard title="ESL tags" loading={tags.loading}
+          left={{ label: "online", value: tags.data?.online ?? 0, tone: "ok" }}
+          right={{ label: "offline", value: (tags.data?.total ?? 0) - (tags.data?.online ?? 0), tone: "bad" }} />
+        <StatCard title="Battery health" loading={tags.loading}
+          left={{ label: "normal", value: (tags.data?.total ?? 0) - low, tone: "ok" }}
+          right={{ label: "low", value: low, tone: "warn" }} />
+        <StatCard title="Bound" loading={tags.loading}
+          left={{ label: "bound", value: tags.data?.bound ?? 0, tone: "ok" }}
+          right={{ label: "unbound", value: (tags.data?.total ?? 0) - (tags.data?.bound ?? 0), tone: "faint" }} />
+      </div>
+
       <Tabs
         tabs={[
-          { id: "gateways", label: gw.data ? `Gateways (${gw.data.online}/${gw.data.total})` : "Gateways" },
+          { id: "gateways", label: gwData ? `Gateways (${gwData.online}/${gwData.total})` : "Gateways" },
           { id: "tags", label: tags.data ? `Tags (${tags.data.online}/${tags.data.total})` : "Tags" },
         ]}
         active={tab}
@@ -54,6 +77,26 @@ export default function MinewStoreDetail({ params }) {
       {tab === "gateways" && <GatewaysTable state={gw} />}
       {tab === "tags" && <TagsTable state={tags} />}
     </div>
+  );
+}
+
+function StatCard({ title, left, right, loading }) {
+  return (
+    <Card>
+      <div className="hint" style={{ marginBottom: 10 }}>{title}</div>
+      {loading ? <Spinner /> : (
+        <div className="inline" style={{ justifyContent: "space-between" }}>
+          <div className="inline" style={{ gap: 6 }}>
+            <Dot tone={left.tone} /><b style={{ fontSize: 20 }}>{left.value}</b>
+            <span className="hint">{left.label}</span>
+          </div>
+          <div className="inline" style={{ gap: 6 }}>
+            <b style={{ fontSize: 20 }}>{right.value}</b>
+            <span className="hint">{right.label}</span>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -120,7 +163,9 @@ function TagsTable({ state }) {
               <td className="mono">{t.mac}</td>
               <td>{t.sizeInches ? `${t.sizeInches}"` : "—"}</td>
               <td>{t.color ?? "—"}</td>
-              <td>{t.battery != null ? `${t.battery}%` : "—"}</td>
+              <td style={{ color: t.battery != null && t.battery <= LOW_BATTERY ? "var(--warn)" : undefined }}>
+                {t.battery != null ? `${t.battery}%` : "—"}
+              </td>
               <td className="mono">{t.rssi ?? "—"}</td>
               <td className="mono">{t.goodsId ?? "—"}</td>
               <td>{t.lastUpdate ?? "—"}</td>
