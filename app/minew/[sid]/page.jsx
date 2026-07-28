@@ -3,7 +3,6 @@
 // weekly bar chart, success donut) fed by live Minew data, plus the gateway and
 // tag tables. Everything reads through /api/minew/stores/:sid/*.
 import { use, useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { api } from "@/lib/client/api";
 import { Btn, Card, Dot, Spinner, Tabs, dateTime, timeAgo } from "@/components/ui";
 import { BarChart, Donut, Legend } from "@/components/charts";
@@ -41,7 +40,6 @@ function SplitStat({ title, left, right, leftTone = "var(--ok)", rightTone = "va
 
 export default function MinewStoreDetail({ params }) {
   const { sid } = use(params);
-  const router = useRouter();
   const [tab, setTab] = useState("gateways");
   const [ov, setOv] = useState({ loading: true, data: null, error: null });
   const [gw, setGw] = useState({ loading: true, data: null, error: null });
@@ -75,11 +73,10 @@ export default function MinewStoreDetail({ params }) {
   const failure = d?.refresh?.failure ?? 0;
 
   return (
-    <div className="page" style={{ maxWidth: 1200, margin: "0 auto", paddingTop: 32 }}>
+    <div className="page">
       <div className="page-head">
         <div>
-          <Btn sm onClick={() => router.push("/minew")}>← Stores</Btn>
-          <h1 style={{ marginTop: 8 }}>Store overview</h1>
+          <h1>Store Overview</h1>
           <div className="sub mono">{sid}</div>
         </div>
         <Btn onClick={reload}>↻ Reload</Btn>
